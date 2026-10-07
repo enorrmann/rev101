@@ -11,6 +11,7 @@ help:
 	@echo "  make inspect      print container structure for all versions"
 	@echo "  make candidate    build build/MC101_UPA_up.bin with a demo edit"
 	@echo "  make ghidra       analyse the plaintext secondary-MCU firmware"
+	@echo "  make decompile    decompile every function of both images"
 	@echo "  make clean        remove generated extraction output"
 	@echo ""
 	@echo "docs/FINDINGS.md      what the firmware is and what is protected"
@@ -43,6 +44,14 @@ candidate: extract
 # install; set GHIDRA=/path if it is not at the default location).
 ghidra: extract
 	tools/ghidra_analyze.sh all
+
+# Decompile every recovered function of both images into
+# $GHIDRA_WORK/<image>.decompall.txt for offline grepping (requires `make
+# ghidra` first to have created the analysis project).
+decompile:
+	tools/ghidra_decompile.sh --all idm1.bin
+	tools/ghidra_decompile.sh --all sdram1.bin
+	@echo "output: $${GHIDRA_WORK:-/tmp/rev101}/*.decompall.txt"
 
 clean:
 	rm -rf firmware/raw firmware/decoded build

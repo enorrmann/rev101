@@ -126,8 +126,16 @@ Headless analysis (Ghidra 11.3.2, `ARM:LE:32:Cortex`):
 
 | image | base | functions recovered |
 |---|---|---|
-| `idm1.bin` | `0x01100000` | **1,172** |
+| `idm1.bin` | `0x01100000` | **1,062** |
 | `sdram1.bin` | `0x01000000` | **2,069** |
+
+Whole-program decompilation for offline grepping is available as a Ghidra
+post-script (`tools/ghidra/DecompAll.java`, driven by
+`tools/ghidra_decompile.sh --all <image>` or `make decompile`), which writes
+`$GHIDRA_WORK/<image>.decompall.txt`. Most of the "Checksum algorithm" and
+"Read path" sections below were derived from that file rather than from
+targeted `DecompOne` calls, because those routines have no direct callers in
+the analyser's call graph.
 
 Largest recovered functions:
 
@@ -192,23 +200,130 @@ Associated functions in the same module (`0x01075700`–`0x01076200`):
 `FUN_010758fe` (98 B), `FUN_010756ea` (276 B), `FUN_01075a34` (82 B),
 `FUN_01075b4c` (208 B), `FUN_01075c1c` (364 B), `FUN_01075d98` (202 B).
 
-### Checksum algorithm: not yet identified
+### Checksum algorithm: CRC-32, over an unknown byte range
 
 Attempts to pin the integrity algorithm:
 
-* **No 256-entry CRC32 table** exists anywhere in the image — a scan for a
-  reflected-style table (`table[0]==0`, `table[i] & 0xff == i` for all i)
-  found zero candidates.
-* The constants `0xEDB88320`, `0x04C11DB7`, `0xA001` do not appear as
-  immediates.
-* `0x1021` (CRC-16/CCITT) appears twice (`0x0b53fb`, `0x0b5457`) but neither
-  site disassembles coherently, so those are data, not confirmed code.
-* The `%08d: QSPI%d Test CRC32 Start...` and `QSPICSum = %04X` strings sit
-  between Ghidra functions with **no direct xrefs**, i.e. they are reached
-  through computed addresses — consistent with a debug menu dispatch table.
+* **A 256-entry CRC-32 table exists but is *computed at runtime*.** Ghidra's
+  function list misses the generator because it sits between two
+  mis-analysed functions; disassembling `idm1.bin` at `0x011289d0` recovers it:
 
-So the algorithm the device validates remains open. It is almost certainly
-reachable from the debug menu dispatch, which is where to look next.
+  ```
+  011289d8  ldr  r4, [pc, #0xbc]          ; r4 = 0xEDB88320  (literal @0x1128a98)
+  011289da  ldr  r6, [pc, #0xc0]          ; r6 = 0x200a722c  (literal @0x1128a9c)
+  011289dc  mov  ip, #0                   ; i = 0
+  011289e0  mov  r1, ip                   ; crc = i
+  011289e2  movs r3, #4
+  011289e4  tst  r1, #1                   ; 8 iterations, unrolled x4
+  011289ea  eorne r2, r4, r1, lsr #1      ; lsr on crc, eor poly if bit0 clear
+  011289ee  lsreq r2, r1, #1
+  ...
+  01128a00  str  r1, [r6, ip, lsl #2]     ; table[i] = crc
+  01128a0e  strb r1, [r5]                 ; "table initialised" latch
+  ```
+
+  So the reflected CRC-32 polynomial is an immediate after all (`0xEDB88320`),
+  and the 256-entry table is written to **RAM at `0x200a722c`**. The update
+  routine follows at `0x01128a1e`, loading that same pointer:
+
+  ```
+  crc = table[(crc ^ byte) & 0xff] ^ (crc >> 8)    ; 4 bytes per iteration
+  0x01128a8c:  return ~*state
+  ```
+
+  This is why a static scan of the *file* for a materialised table found
+  nothing — **the earlier "no CRC32 table exists" conclusion is retracted.**
+
+* Caveat: the stream at `0x011289c2` is not clean Thumb — `adds r3, #0` is a
+  halfword misaligned with the real code — and the early iterations of the
+  update routine are mangled by the analyser. The arithmetic above is solid;
+  the exact register/offset plumbing is not.
+
+* **The stored `crc32` field still does not validate.** No candidate reproduces
+  it for any entry in any image. Tested and rejected:
+
+  | candidate | `qspi_ver_def.h` (expect `0x5235`) | `init.lzs` (expect `0x6be9`) |
+  |---|---|---|
+  | `zlib.crc32` (reflected, bitwise) | `0x46c203b2` | `0x2ead5edf` |
+  | CRC-32/MPEG-2, big-endian, init `~0` | `0xbd5f414a` | `0x122cf978` |
+  | same, final xor `~0` | `0x42a0beb5` | `0xedd30687` |
+  | 16-bit LE word sum | `0x0898` | `0xaa82` |
+  | byte XOR | `0x33` | `0xae` |
+
+  > These two rows were recomputed against the images in this repository: the
+  > `%` figures and the candidate values above all reproduce from
+  > `mc101_sys_v182.zip` with a stock `zlib.crc32` and a 20-line CRC helper.
+
+  `idm1.bin`'s 16-bit LE word sum happens to equal its expected `0x348c`, but
+  the other sizeable entries fail the same test, so that is a 1-in-65,536
+  coincidence. See [FINDINGS.md](FINDINGS.md) §8.1.3 for the full table.
+
+**Therefore** the field is a CRC-32 over a range that is not simply "the
+declared payload" — most likely a rolling CRC that starts at the image header
+(`+0x20`) and covers the entry's sector including alignment padding. Finding
+that range is the highest-value remaining task in the container work. It is
+*not* a blocker for a secondary-MCU replacement, since the entry table is
+carried through verbatim by `build_qspi`.
+
+## Read path: the QSPI loader never decompresses
+
+This is the most useful decompilation result for the custom-firmware goal, and
+it comes from `idm1.bin` `FUN_0110d6e0` (C1C catalogue loader),
+`FUN_01123bf0` (name→entry lookup) and `FUN_0112444e` (raw read primitive).
+See [FINDINGS.md](FINDINGS.md) §8.1.1 for the listings.
+
+* `FUN_0112444e(buf, offset, len)` copies `len` bytes from the QSPI window
+  straight into `buf`. Word-wise bulk, byte-wise tail. No transform.
+* Every entry payload is therefore **exactly its stored bytes**, bounded by a
+  `0x1000000` (16 MiB) aperture mask.
+* The name comparison is 16 bytes, case-insensitive, with non-printables folded
+  to `_`, which explains the truncated on-image names (`tone_pcmx_cmn.bi`,
+  `inst_pcmx_rpg68.`).
+
+**Consequence for a replacement image:** `sdram1.bin` / `idm1.bin` must be
+raw, uncompressed images. Do not compress them.
+
+Also in that loader, each entry's `0x1c`-byte header is copied into a
+descriptor whose last field is a **base pointer computed as `stored + file_base`**.
+A replacement image must satisfy that expectation or the device will follow a
+bad pointer at boot.
+
+## Why `init.lzs` cannot be solved from these images
+
+A whole-file search for `init.lzs`, `.lzs` and `lzs` over `C0A`, `C0C`, `C1A`,
+`C1C`, `sdram1.bin` and `idm1.bin` returns **one** hit: the filename in `C0C`'s
+entry table. `VQSPI` occurs exactly twice in the whole extraction, both in
+`sdram1.bin`.
+
+Combined with the read path above, this means the decompressor is **not**
+reachable from the QSPI loader in either plaintext image. It lives either in
+the unreadable `C0A` main-CPU application or behind a pointer table the
+analyser did not resolve. The "find the `.lzs` routine in `sdram1.bin`" plan is
+therefore **closed**; the algorithm must come from an external implementation.
+
+Related false lead, recorded so it is not re-explored: `sdram1.bin`
+`FUN_01075c1c` / `FUN_01075b4c` contain what look like shift amounts
+(`>> 7`, `>> 11`, `>> 3`, `>> 5`) cycling over a buffer. They are **not** a
+bit-reader — `0x6171` is a BMC command tag and the third byte is a register
+field index, which is why the apparent widths trail off into noise. The strings
+in that module (`QSPICSum = %04X`) come from `FUN_01075d98`, the CRC-32
+self-test, which uses the algorithm above.
+
+## Next steps
+
+1. **Determine the CRC-32 byte range** the entry `crc32` field covers, by
+   re-running the recovered algorithm over candidate ranges until it reproduces
+   a stored value for several entries at once.
+2. **Reconcile the entry-base arithmetic** in `FUN_01123bf0`: it stores the
+   `+0x28` field (`0x10`) and indexes `base + i*0x20`, which does not match the
+   observed `0x30` table start. Either the field means something else or the
+   decompilation elides an add.
+3. **Build the secondary-MCU replacement interface map** from the recovered
+   symbols (`CORE1_LOAD_QSPI`, `BMCInit*`, `CEZUtilQSPI*`, `CChoSDD320`) so a
+   custom image can be linked against the real entry points.
+4. Locate `13CQSPIFileRead` and `15CEZUtilQSPIBlock` (mangled-name string table
+   at image offset `0x2be1ec`) and decompile them to close out the container
+   read path.
 
 To reproduce the analysis:
 
@@ -228,18 +343,12 @@ export XDG_CONFIG_HOME=/tmp/rev101/ghidra_home
 
 * This image is **plaintext, symbol-rich and debug-enabled** — by far the best
   documented part of the product.
-* The `.lzs` decompressor and the `qspi_ver_def.h` parser both plausibly live
-  here. The parser is already located (`0x2c8ad0` key table). Finding the
-  `.lzs` routine here is the highest-value remaining task and needs no key.
+* The `qspi_ver_def.h` parser is located (`0x2c8ad0` key table) and the QSPI
+  read path is decompiled. The `.lzs` decompressor is **not** here — see
+  "Why `init.lzs` cannot be solved from these images" above.
 * The BMC/DSP/ERAM/QSPI driver split is now named, so a replacement firmware
   has a clear interface map to work against.
+* Because the QSPI loader consumes raw bytes and never transforms them, a
+  replacement `sdram1.bin` / `idm1.bin` is the one custom-firmware target that
+  needs neither a key nor a codec.
 
-## Next steps
-
-1. Locate the `.lzs` decompressor in `sdram1.bin` (search for the routine that
-   consumes `init.lzs`, or for LZSS-style bit-reader code).
-2. Decompile `13CQSPIFileRead` and `15CEZUtilQSPIBlock` to confirm the QSPI
-   container read path end to end.
-3. Use the `QSPI%d Test CRC32` routine to determine the checksum algorithm the
-   device actually validates — this is the integrity question left open in
-   [FINDINGS.md](FINDINGS.md).

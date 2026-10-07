@@ -106,6 +106,9 @@ Honest status of what is and is not yet possible.
 **Works today:**
 
 * Extract/repack every container byte-exactly (verified, all three versions).
+  The device's own QSPI parser confirms the layout: magic, 0x20-byte entries,
+  16-byte case-insensitive names with non-printables folded to `_`
+  ([SECONDARY_MCU.md](SECONDARY_MCU.md), [FINDINGS.md](FINDINGS.md) §8.1.1).
 * Replace any QSPI entry payload, including `sdram1.bin` / `idm1.bin`, which
   are **plaintext ARM Cortex-M code** and fully readable.
 * Edit the plaintext `C1C` entries and `C0C` metadata entries.
@@ -113,15 +116,36 @@ Honest status of what is and is not yet possible.
 **Not yet possible:**
 
 * **Rebuilding `C0A` with modified application code.** The C0A body contains a
-  1.1 MB incompressible window (`0xb6000`–`0x1d0000`) whose protection
-  mechanism is undetermined. You can currently only copy it through unmodified.
-* **Decompressing `init.lzs`** — the runtime uses a bespoke `.lzs` codec. Until
-  that is solved, the runtime itself cannot be modified.
+  1.1 MB incompressible window (`0x0c0000`–`0x1d0000`, exactly 1,114,112 B)
+  whose protection mechanism is undetermined. You can currently only copy it
+  through unmodified.
+* **Decompressing `init.lzs`** — the runtime uses a bespoke `.lzs` codec. The
+  decompressor is *not* reachable from the QSPI loader in either plaintext
+  image, and no image references `init.lzs` by name, so the algorithm has to
+  come from an external implementation. Until then the runtime cannot be
+  modified.
 * **Knowing whether the bootloader accepts an unmodified-but-repacked image.**
-  The container has no CRC or signature table, so the format presents no
-  obstacle — but the verification behaviour of a first-stage bootloader we have
-  not located is unknown.
+  The container has no signature table, so the format presents no obstacle —
+  but the verification behaviour of a first-stage bootloader we have not
+  located is unknown.
+
+**Unverified, not just impossible:**
+
+* The entry-table `crc32` is **not** a checksum of the payload — no candidate
+  reproduces it for any entry ([FINDINGS.md](FINDINGS.md) §8.1.3). The
+  algorithm is confirmed to be CRC-32, but the byte range it covers is not, so
+  the tooling cannot independently confirm that a *modified* image is
+  internally consistent. The repack carries the field through unchanged, which
+  is why the round-trip stays byte-exact.
 
 **Therefore the realistic custom-firmware target right now is the secondary
 MCU** (`C1A` → `sdram1.bin` / `idm1.bin`), which involves no cryptography at
-all. See [FINDINGS.md](FINDINGS.md) §8 for the recommended order of work.
+all. Two constraints on a replacement, both from the decompiled loader:
+
+* the payload must be **raw, uncompressed bytes** — the QSPI reader never
+  transforms what it reads; and
+* the `0x1c`-byte descriptor the loader fills per entry ends in a **base
+  pointer computed as `stored + file_base`**, so the replacement has to satisfy
+  that expectation or boot will follow a bad pointer.
+
+See [FINDINGS.md](FINDINGS.md) §8 for the recommended order of work.

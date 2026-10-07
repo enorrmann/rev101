@@ -33,7 +33,8 @@ tools/extract.py        extract members and QSPI entries
 tools/patch.py          replace QSPI entry payloads and repack
 tools/make_candidate.py build a demo modified image
 tools/ghidra_analyze.sh headless Ghidra analysis driver
-tools/ghidra/*.java     Ghidra post-scripts (function dump, decompile)
+tools/ghidra_decompile.sh decompile one function, or every function (--all)
+tools/ghidra/*.java     Ghidra post-scripts (function dump, decompile, string xrefs)
 
 tests/                  round-trip, full-rebuild and patch verification
 firmware/               generated extraction output (gitignored)
@@ -49,7 +50,7 @@ $ make test
 18/18 checks passed      tests/test_roundtrip.py
 9/9  checks passed       tests/test_full_rebuild.py
 9/9  checks passed       tests/test_patch.py
-13/13 checks passed      tests/test_safety.py
+14/14 checks passed      tests/test_safety.py
 ```
 
 Because a rebuild of unmodified input reproduces the original byte-for-byte,
@@ -74,15 +75,19 @@ point this tooling at an image you did not build yourself:
 
 | component | status |
 |---|---|
-| tar + QSPI container formats | **solved**, byte-exact repack |
-| `sdram1.bin` / `idm1.bin` (secondary MCU) | **plaintext ARM Cortex-M** — readable and replaceable now |
+| tar + QSPI container formats | **solved**, byte-exact repack, confirmed by the device's own parser |
+| `sdram1.bin` / `idm1.bin` (secondary MCU) | **plaintext ARM Cortex-M**, QSPI read path decompiled; primary target now |
 | `C1C` entries, `C0C` metadata | plaintext, editable in place |
-| `C0A` main application | partly compressed, 1.1 MB incompressible window of undetermined protection |
-| `init.lzs` runtime | bespoke `.lzs` codec, **not yet decompressed** |
+| QSPI entry `crc32` field | algorithm is **CRC-32** (confirmed), the covered byte range is **not** — see [docs/SECONDARY_MCU.md](docs/SECONDARY_MCU.md) |
+| `C0A` main application | partly compressed, 1.1 MB incompressible window (`0x0c0000`–`0x1d0000`) of undetermined protection |
+| `init.lzs` runtime | bespoke `.lzs` codec, **not yet decompressed**; no decompressor exists in either plaintext image |
 | bootloader verification | unknown — first stage not present in these images |
 
 The realistic custom-firmware target today is the **secondary MCU**, which
-requires no cryptography. See [docs/SECONDARY_MCU.md](docs/SECONDARY_MCU.md).
+requires no cryptography: the QSPI loader there reads entry payloads verbatim,
+so a replacement must be a raw image. See
+[docs/SECONDARY_MCU.md](docs/SECONDARY_MCU.md) and §8 of
+[docs/FINDINGS.md](docs/FINDINGS.md) for how that was established.
 
 ## Hardware warning
 
