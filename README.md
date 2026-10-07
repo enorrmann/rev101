@@ -1,0 +1,90 @@
+# rev101 — Roland MC-101 (RPG69) firmware reverse engineering
+
+Working notes and tooling from reverse-engineering three MC-101 firmware
+releases, with the goal of building custom firmware.
+
+## What this is
+
+The three `mc101_sys_v18*.zip` files are official Roland updates. Each contains
+a plain POSIX tar (`MC101_UPA_up.bin`) holding four raw flash images for two
+CPUs. Analysis of what lives where, and what is protected, is in
+[docs/FINDINGS.md](docs/FINDINGS.md).
+
+## Quick start
+
+```sh
+make help          # list targets
+make test          # verification suite (36 checks)
+make inspect       # print container structure for all three versions
+make extract-all   # unpack everything into firmware/raw/
+make candidate     # build a demo modified image into build/
+make ghidra        # analyse the plaintext secondary-MCU firmware
+```
+
+## Layout
+
+```
+docs/FINDINGS.md        container formats, region map, what is/isn't protected
+docs/PATCHING.md        how to build and verify a modified image
+docs/SECONDARY_MCU.md   the plaintext ARM Cortex-M firmware (Ghidra results)
+
+tools/mc101fw.py        tar + QSPI parse/rebuild library (stdlib only)
+tools/extract.py        extract members and QSPI entries
+tools/patch.py          replace QSPI entry payloads and repack
+tools/make_candidate.py build a demo modified image
+tools/ghidra_analyze.sh headless Ghidra analysis driver
+tools/ghidra/*.java     Ghidra post-scripts (function dump, decompile)
+
+tests/                  round-trip, full-rebuild and patch verification
+firmware/               generated extraction output (gitignored)
+build/                  generated candidate images (gitignored)
+```
+
+## The key result
+
+**Full-container rebuild is byte-exact for all three releases.** Verified:
+
+```
+$ make test
+18/18 checks passed      tests/test_roundtrip.py
+9/9  checks passed       tests/test_full_rebuild.py
+9/9  checks passed       tests/test_patch.py
+13/13 checks passed      tests/test_safety.py
+```
+
+Because a rebuild of unmodified input reproduces the original byte-for-byte,
+any difference in a modified image is provably the change you intended — no
+collateral drift in tar headers, entry tables, alignment padding or unrelated
+members.
+
+## Handling untrusted images
+
+QSPI entry names and tar member sizes come straight from the image file. If you
+point this tooling at an image you did not build yourself:
+
+* entry names are reduced to a safe basename and the final write path is
+  re-checked against the output directory (`safe_entry_name`,
+  `resolve_within`), so a crafted entry named `../../x` cannot escape;
+* declared member sizes are bounded (`MAX_CONTAINER_BYTES`,
+  `MAX_MEMBER_BYTES`) to prevent decompression-bomb-style memory exhaustion.
+
+`tests/test_safety.py` exercises both.
+
+## Current status of the custom-firmware goal
+
+| component | status |
+|---|---|
+| tar + QSPI container formats | **solved**, byte-exact repack |
+| `sdram1.bin` / `idm1.bin` (secondary MCU) | **plaintext ARM Cortex-M** — readable and replaceable now |
+| `C1C` entries, `C0C` metadata | plaintext, editable in place |
+| `C0A` main application | partly compressed, 1.1 MB incompressible window of undetermined protection |
+| `init.lzs` runtime | bespoke `.lzs` codec, **not yet decompressed** |
+| bootloader verification | unknown — first stage not present in these images |
+
+The realistic custom-firmware target today is the **secondary MCU**, which
+requires no cryptography. See [docs/SECONDARY_MCU.md](docs/SECONDARY_MCU.md).
+
+## Hardware warning
+
+Nothing in this repository writes to hardware. `make candidate` produces an
+image file and reports its diff against the base; flashing it is your decision.

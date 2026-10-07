@@ -1,0 +1,1 @@
+esta carpeta contiene 3 versiones de un mismo firmware, el objetivo es hacer ingenieria inversa para poder implementar un nuevo firmware custom agregando funcionalidades a lo existente incluso reemplazarlo por completo con un firmware completamente nuevo

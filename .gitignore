@@ -1,0 +1,18 @@
+# Extracted firmware members, decoded payloads and built images.
+#
+# Regenerate with:  make extract / make candidate
+#
+firmware/raw/
+firmware/decoded/
+build/
+*.zip
+.reasonix
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Scratch analysis: raw decompressed streams should not be committed
+*.lzs
