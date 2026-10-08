@@ -9,9 +9,6 @@ Usage:
   python3 tools/patch.py --base mc101_sys_v182.zip --out build/MC101_UPA_up.bin \\
       --replace RPG69_C1A_up.bin:sdram1.bin:firmware/decoded/sdram1_patched.bin
 
-  python3 tools/patch.py --base mc101_sys_v182.zip --out build/candidate.bin \\
-      --replace-in-place RPG69_C1C_up.bin:qspi_ver_def.h:firmware/decoded/qspi_ver_def.h
-
 Safety: this never touches hardware. It writes an image file and reports a
 diff summary versus the base so you can see exactly what changed.
 """

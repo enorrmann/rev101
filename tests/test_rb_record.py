@@ -35,16 +35,24 @@ def check(rel: str, type_word: int, count: int, record_size: int,
     assert rc.names[0].encode("latin-1") == first_name, (rel, rc.names[0])
 
 
+CASES = [
+    ("firmware/raw/v182/RPG69_C0C_up_entries/kit_pcmx_cmn.bin",
+     0x00120005, 74, 3328, b"Standard Kit    "),
+    ("firmware/raw/v182/RPG69_C0C_up_entries/tone_pcmx_cmn.bi",
+     0x00140004, 837, 1432, b"Piano 1         "),
+    ("firmware/raw/v182/RPG69_C0C_up_entries/inst_pcmx_cmn.bi",
+     0x00120003, 711, 216, b"Off             "),
+    ("firmware/raw/v182/RPG69_C1C_up_entries/spf_muse_rpg68.b",
+     0x00200002, 850, 272, b"Ult.P*mp A L\x00\x00\x00\x00"),
+]
+
+
 def main() -> int:
-    check("firmware/raw/v182/RPG69_C0C_up_entries/kit_pcmx_cmn.bin",
-          0x00120005, 74, 3328, b"Standard Kit    ")
-    check("firmware/raw/v182/RPG69_C0C_up_entries/tone_pcmx_cmn.bi",
-          0x00140004, 837, 1432, b"Piano 1         ")
-    check("firmware/raw/v182/RPG69_C0C_up_entries/inst_pcmx_cmn.bi",
-          0x00120003, 711, 216, b"Off             ")
-    check("firmware/raw/v182/RPG69_C1C_up_entries/spf_muse_rpg68.b",
-          0x00200002, 850, 272, b"Ult.P*mp A L\x00\x00\x00\x00")
+    for rel, type_word, count, record_size, first_name in CASES:
+        check(rel, type_word, count, record_size, first_name)
     print("PASS  record-container schema: kit/tone/inst/spf headers byte-exact")
+    print()
+    print(f"{len(CASES)}/{len(CASES)} checks passed")
     return 0
 
 

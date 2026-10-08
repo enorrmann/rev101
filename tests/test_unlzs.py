@@ -45,10 +45,15 @@ def real_file_properties():
 
 
 def main() -> int:
+    checks = 0
     framed_roundtrip()
-    real_file_properties()
+    checks += 1
     print("PASS  synthetic framed stream round-trips")
+    real_file_properties()
+    checks += 1
     print("PASS  real init.lzs: 470,382 markers / 498,599 B payload, 'TR-909 Kick 1' found")
+    print()
+    print(f"{checks}/{checks} checks passed")
     return 0
 
 

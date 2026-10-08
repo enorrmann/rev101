@@ -60,6 +60,8 @@ $ make test
 9/9  checks passed       tests/test_full_rebuild.py
 9/9  checks passed       tests/test_patch.py
 14/14 checks passed      tests/test_safety.py
+2/2  checks passed       tests/test_unlzs.py
+4/4  checks passed       tests/test_rb_record.py
 ```
 
 `test_full_rebuild.py` is the acceptance test: `extract -> repack` reproduces
@@ -225,9 +227,9 @@ error: entry 'does_not_exist.bin' not found in RPG69_C1A_up.bin
 exit=1
 ```
 
-> The module docstring of `patch.py` also mentions a `--replace-in-place` flag.
-> That flag is **not implemented**; use `--replace` (an in-place same-size edit
-> is just a `--replace` whose file has the original length).
+> There is no `--replace-in-place` flag: an in-place same-size edit is just a
+> `--replace` whose file has the original length, and the container length is
+> unchanged automatically.
 
 ### 5.3 Drive the API directly — `tools/mc101fw.py`
 
@@ -590,10 +592,11 @@ These files already exist in `/tmp/rev101` on this machine, so the grepping in
 Ghidra. Ghidra needs a writable `$HOME/.config`, which is why the scripts
 redirect `HOME`/`XDG_*` into `GHIDRA_WORK`.
 
-The three open questions that Ghidra work is chasing:
-the covered range of the entry `crc32`, the entry-base arithmetic in
-`FUN_01123bf0`, and the `.lzs` decompressor (not reachable from either
-plaintext image).
+The open questions that Ghidra work is chasing:
+the covered range of the entry `crc32`, and the `PRJ5` record schema inside
+`init.lzs` (4-bit-framed, not compressed, so there is no `.lzs` decompressor to
+find). The entry-base arithmetic in `FUN_01123bf0` is now reconciled — see
+[FINDINGS.md](FINDINGS.md) §8.1.1.
 
 ## 10. What is not possible yet
 
@@ -612,15 +615,14 @@ cryptography. See the recommended work order in
 
 ## 11. Rough edges worth knowing
 
-* `patch.py`'s docstring advertises a `--replace-in-place` flag that does not
-  exist — use `--replace`.
+* `patch.py`'s docstring advertises no `--replace-in-place` flag; an in-place
+  same-size edit is just a `--replace` whose file has the original length.
 * `--replace` matches `MEMBER` as a substring: `C1A` is convenient, but be
   aware it is not an exact-name match.
 * The `crc32` in an entry table is never recomputed (see §7).
 * `describe()`'s one-line C0A summary prints `load_off=0x0 load_addr=0xc0040`;
-  the field-offset table in the `mc101fw.py` module docstring is written
-  big-endian for a couple of entries. Trust the parsed output and the hexdump,
-  not the comment, when it comes to C0A header offsets.
+  `load_off` is the value stored in the C0A header (the fields are big-endian
+  32-bit). Trust the parsed output and the hexdump if a comment ever disagrees.
 * Adding entries (FW-3) changes the entry count — valid container, unproven on
   hardware.
 * `idm1.bin`/`sdram1.bin` are identical across v1.80–v1.82, so cross-version

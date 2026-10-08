@@ -42,7 +42,7 @@ versions (verified — see [§7](#7-verification)).
 
 ```
 +0x20   "QSPI " + NUL pad            magic
-+0x28   u32 LE   entry-base field    observed 0x20
++0x28   u32 LE   format word         observed 0x20 (must equal 0x20)
 +0x2c   u32 LE   entry count
 +0x30   entry table, 0x20 bytes each:
             name[16] | offset u32 | size u32 | crc32 u32 | ext u32
@@ -113,20 +113,25 @@ disassembling mid-instruction and is not meaningful.
 0x00  16 B   "App1_Main\0..."      name
 0x10  16 B   "2023/05/17 22:54"    date, no NUL (runs to 0x1f)
 0x20   8 B   "0.010001"            version string
-0x2c   4 B   0x00000060            load offset
+0x28   4 B   0x00000060            load offset = 0x60
+0x2c   4 B   0x00000000            zero
 0x30   4 B   0x000c0040            load address
 0x34  12 B   0xffffffff x3         erased region
 0x40   4 B   0x000c0060            mirror
 0x44   4 B   0x003565b0            payload size (see note)
-0x50   4 B   digest
+0x48   4 B   0x00000060
+0x4c   4 B   0x00000000
+0x50   4 B   0x513fc2d9            digest
 0x54   4 B   0xb6020001            flags / format id
+0x58   4 B   0x00000000
 0x5c   4 B   0xffffffff
 ```
 
-*Size note:* for v1.82 the field is `0x3565b0` while filesize − 0x60 is
-`0x3565f0`; the delta is a fixed 0xa0 tail. The tooling records the value and
-asserts only that the delta is non-negative and < 0x1000, rather than
-pretending to a byte-exact rule we have not proven.
+*Size note:* the `0x44` field is `0x3565b0` for v1.82 while filesize − 0x60 is
+`0x3565f0`; the delta is a fixed `0xa0` tail. (Both are consistent with
+`0x44` being a big-endian u32.) The tooling records the value and asserts only
+that the delta is non-negative and < 0x1000, rather than pretending to a
+byte-exact rule we have not proven.
 
 ### Region map of the C0A body
 
@@ -384,7 +389,7 @@ would require the Roland `PRJ` format reference (community
 `ZenInspector`/`RolandZenDecodeXML` documents PRJ file structure but the
 per-field tables for the MC-101 PRJ were not reachable from this workspace).
 
-### How to obtain the `.lzs` algorithm
+### How the `.lzs` question was resolved
 1. ~~Locate a decompressor inside `sdram1.bin` / `idm1.bin`~~ — resolved: there
    is none; the framing is data-inherent, not a runtime decode.
 2. ~~Find an open-source Roland/KORG `.lzs` implementation~~ — resolved: the
@@ -398,6 +403,8 @@ $ make test
 9/9  checks passed       # tests/test_full_rebuild.py
 9/9  checks passed       # tests/test_patch.py
 14/14 checks passed      # tests/test_safety.py
+2/2  checks passed       # tests/test_unlzs.py
+4/4  checks passed       # tests/test_rb_record.py
 ```
 
 The acceptance test is **byte-exact full-container rebuild** for all three
@@ -417,8 +424,8 @@ confirm a modified image is internally consistent. See §8.1.3.
 
 ## 8. Recommended next steps, in order
 
-> **Step 8.1 is done.** Its results are in this section. Step 8.2 is the one
-> that is now unblocked; read 8.3 before starting it.
+> **Steps 8.1 and 8.2 are done.** Their results are in this section. Step 8.3
+> is the open decision; read it before doing anything else.
 
 ### 8.1 Reverse `sdram1.bin` properly — DONE
 
@@ -456,14 +463,14 @@ name through `FUN_01123bf0` — a QSPI name→entry lookup:
 uint FUN_01123bf0(undefined4 *param_1, char *param_2)
 {
   local_48='Q'; local_47='S'; local_46='P'; local_45='I';   // "QSPI" magic
-  local_44 = 0x10;      // +0x28 field
-  local_40 = 0x20;      // +0x2c field  -> must equal 0x20
-  local_3c = 0;         // +0x30 field  -> entry count
+  local_44 = 0x10;      // scratch (overwritten by the read below)
+  local_40 = 0x20;      // header word at file +0x28 -> must equal 0x20
+  local_3c = 0;         // header word at file +0x2c -> entry count
   if ((*DAT_01123d14 == 0) && (FUN_0112444e(&local_48, 0, 0x10) != 0)) {
       if (local_48=='Q' && local_47=='S' && local_46=='P' && local_45=='I'
           && local_40==0x20 && local_3c!=0) {
           *puVar2 = local_3c;        // entry count
-          puVar2[1] = 0x10;          // +0x28 field, reused as an entry index base
+          puVar2[1] = 0x10;          // entry base, in QSPI-container offsets
       }
   }
   ...
@@ -477,19 +484,21 @@ Every field the tooling assumes is confirmed here, by the device itself:
 
 * magic `"QSPI"` at `+0x20`;
 * entry stride `0x20`;
-* the `+0x2c` field must be `0x20`;
+* the header word at `+0x28` must be `0x20`, and `+0x2c` carries the entry
+  count — both match the file (`+0x28 == 0x20`; `+0x2c == 12` in `C0C`, `16` in
+  `C1C`, `2` in `C1A`);
 * entries carry a 16-byte name compared case-insensitively, non-printable
   bytes folded to `_` — which is why `tone_pcmx_cmn.bi` and
   `inst_pcmx_rpg68.` are stored truncated to exactly 16 bytes with no NUL.
 
-> **Note on the entry base — still open.** The lookup reads the `+0x28` field
-> (`0x10`) and indexes entries as `field + i*0x20`. `0x10 + i*0x20` matches
-> neither the observed `0x30` table start nor any other obvious value, so
-> either the field means something other than a byte base or the decompilation
-> elides an add. Treat the device's exact index arithmetic as unresolved. What
-> is confirmed beyond doubt is the magic, the `0x20` stride, the `+0x2c` size
-> requirement, the count field and the name comparison — i.e. everything the
-> parser in `tools/mc101fw.py` depends on.
+> **Entry base.** The 16 header bytes are read from QSPI-container offset 0, so
+> the container origin is the magic at file `+0x20`. The lookup then indexes
+> entries as `0x10 + i*0x20` *in that same offset space*, i.e. file
+> `0x30 + i*0x20` — exactly the observed table start. (An earlier revision read
+> the literal `0x10` as the value of the `+0x28` field; the `+0x28` word is
+> really `0x20`.) Confirmed beyond doubt: the magic, the `0x20` stride, the
+> `+0x28 == 0x20` check, the count at `+0x2c`, and the name comparison — i.e.
+> everything the parser in `tools/mc101fw.py` depends on.
 
 The read primitive is `FUN_0112444e(buf, offset, len)`: it copies `len` bytes
 from the QSPI window into `buf`, word-wise for the bulk of the transfer and
@@ -591,30 +600,28 @@ Neither image contains the other's string table: `wromInfo_%s.bin`,
 separately for two different cores, as expected — a replacement must
 therefore be built twice, not once and copied.
 
-### 8.2 Decompress `init.lzs` — DONE (§6)
+### 8.2 Decode `init.lzs` — DONE for the framing (§6)
 
-Resolved while §8.2 was still written as "closed". There is no decompressor
-and none is needed: `init.lzs` is a 4-bit-framed stream whose marker bytes
-(low nibble `f`) are dropped to reveal the payload. See §6 and
-`tools/unlzs.py`; the open part is only the marker high-nibble semantics and
-the MC-101 record schema, not the codec.
+There is no decompressor and none is needed: `init.lzs` is a 4-bit-framed
+stream whose marker bytes (low nibble `f`) are dropped to reveal the payload.
+See §6 and `tools/unlzs.py`. The framing is closed; what is open is the marker
+high-nibble semantics and the `PRJ5` record schema — *not* a codec.
 
 Two routes remain for what is genuinely still unreadable, in order of expected
 value:
 
 1. **Recombine the `init.lzs` marker nibbles** into 12-bit fields and map the
-   record schema (the framing rule is known; the schema is the remaining work).
+   `PRJ5` record schema (the framing rule is known; the schema is the
+   remaining work).
 2. **Acquire a newer or older Roland service image** in which the `C0A` body
    is not in the incompressible window, and diff. The window is
    byte-identical across v1.81→v1.82 but almost entirely different across
    v1.80→v1.81 (§4), so at least one release boundary is worth revisiting.
 
-**Do not** spend further effort on blind byte-model fitting. §6's
-`0xXf` ladder, the density alphabet and the marker distribution are all
-consistent with an LZ77-family container already (a 16-byte block repeats 21
-times with a constant 13,056-byte stride, and literal/ruler zones alternate
-visibly around offsets `0x7a700`–`0x7ab00`), but the literal encoder is
-unknown and guessing it is unbounded work.
+**Do not** spend further effort on blind byte-model fitting. §6's `0xXf`
+ladder, the density alphabet and the marker distribution are fully explained by
+the marker-framing scheme already; there is no separate literal encoder to
+recover, so any further effort belongs in the record schema, not a codec.
 
 ### 8.3 Only then decide between patching `C0A` and replacing the secondary MCU
 
@@ -661,6 +668,6 @@ why 8.3 recommends starting there.
   there is no decompressor, only inline framing.
 * There is still **no signature table**, and the entry `crc32` field does not
   validate against the payload, so the image format itself remains no obstacle;
-  the open questions are now the `.lzs` codec, the CRC's covered range, and the
-  bootloader's verification behaviour.
+  the open questions are now the `PRJ5` record schema (there is no `.lzs` codec
+  — §6), the CRC's covered range, and the bootloader's verification behaviour.
 

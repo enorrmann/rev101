@@ -119,11 +119,12 @@ Honest status of what is and is not yet possible.
   1.1 MB incompressible window (`0x0c0000`–`0x1d0000`, exactly 1,114,112 B)
   whose protection mechanism is undetermined. You can currently only copy it
   through unmodified.
-* **Decompressing `init.lzs`** — the runtime uses a bespoke `.lzs` codec. The
-  decompressor is *not* reachable from the QSPI loader in either plaintext
-  image, and no image references `init.lzs` by name, so the algorithm has to
-  come from an external implementation. Until then the runtime cannot be
-  modified.
+* **Editing `init.lzs` field-by-field.** `init.lzs` is *not* compressed — it is
+  a 4-bit-framed stream (drop every byte whose low nibble is `f` to recover the
+  payload; `tools/unlzs.py`), so there is no decompressor to find and none is
+  needed. The header tags and drum-kit fragment names are readable today; what
+  is still unresolved is the `PRJ5` field-level record schema, so the runtime
+  cannot yet be edited field-by-field. See [FINDINGS.md](FINDINGS.md) §6.
 * **Knowing whether the bootloader accepts an unmodified-but-repacked image.**
   The container has no signature table, so the format presents no obstacle —
   but the verification behaviour of a first-stage bootloader we have not

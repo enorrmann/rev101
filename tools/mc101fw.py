@@ -9,14 +9,16 @@ firmware updates:
 
   2. INNER: each of those images may itself carry a "QSPI " container:
          +0x20  "QSPI " + NUL padding          (magic)
-         +0x28  entry base offset   (u32 LE)
-         +0x2c  entry count         (u32 LE)
-         entry (0x20 bytes, at base + i*0x20):
+         +0x24  u32 LE  0x20 (constant)
+         +0x28  u32 LE  entry-base field    (u32 LE) = 0x20
+         +0x2c  u32 LE  entry count         (u32 LE)
+         entry (0x20 bytes, at entry_base + i*0x20):
              name[16] | offset u32 | size u32 | crc32 u32 | ext u32
      Entry payloads are 0x1000-aligned.
 
-The `C1A`/`C1C` images additionally begin with a leading byte length prefix
-(observed 0x003fff30 == filesize - 48) followed by 48 NUL bytes.
+The `C1A`/`C1C` images additionally begin with a leading length prefix
+(observed 0x003fff30 == filesize - 48, stored little-endian) followed by 48 NUL
+bytes.
 
 This module is deliberately dependency-free (stdlib only).
 """
@@ -47,10 +49,11 @@ QSPI_MAGIC = b"QSPI "  # 5 bytes, followed by 3 NUL pad at +0x20
 #   +0x2c  entry count (u32 LE)
 #   +0x30  first entry header (0x20 B each)
 #
-# NOTE: the 0x28 field is an *offset within the header block*, not the absolute
-# address of the first entry.  Entries always begin at 0x30 in every image we
-# have.  Using 0x28+0x20 as the absolute start is what produced the earlier
-# "implausible entry base 0x20" failure; we now derive the start explicitly.
+# NOTE: the first entry always begins at 0x30 in every image we have; the
+# 0x28 field (observed 0x20) is carried through unchanged by build_qspi and is
+# not used to locate the table.  Using 0x28+0x20 as the absolute start is what
+# produced the earlier "implausible entry base 0x20" failure; we derive the
+# start explicitly instead.
 QSPI_ENTRY_SIZE = 0x20
 QSPI_ENTRY_BASE_FIELD = 0x28
 QSPI_ENTRY_COUNT_OFF = 0x2C
@@ -65,15 +68,15 @@ QSPI_ENTRIES_START = 0x30
 #   0x00  16 B   "App1_Main\0..."     name
 #   0x10  16 B   "2023/05/17 22:54"   date, NO NUL terminator (runs to 0x1f)
 #   0x20   8 B   "0.010001"           version string
-#   0x28   4 B   NUL padding
-#   0x2c   4 B   0x00000060           load offset = 0x60
-#   0x30   4 B   0x000c0040           load address, stored -0x40 => 0x0c0000
+#   0x28   4 B   0x00000060           load offset (= 0x60, big-endian u32)
+#   0x2c   4 B   0x00000000           zero
+#   0x30   4 B   0x000c0040           load address (big-endian u32)
 #   0x34  12 B   0xffffffff x3        erased region
 #   0x40   4 B   0x000c0060           load offset/addr mirror
-#   0x44   4 B   0x003565b0           payload size, see SIZE_SEMANTICS below
-#   0x48   4 B   0x60000000
+#   0x44   4 B   0x003565b0           payload size, big-endian (see SIZE_SEMANTICS)
+#   0x48   4 B   0x00000060
 #   0x4c   4 B   0x00000000
-#   0x50   4 B   0x513fc2d9           digest
+#   0x50   4 B   0x513fc2d9           digest (big-endian u32)
 #   0x54   4 B   0xb6020001           flags / format id
 #   0x58   4 B   0x00000000
 #   0x5c   4 B   0xffffffff
@@ -222,7 +225,7 @@ def _check_tar_header_sizes(data: bytes) -> None:
 def build_tar(members: list[TarMember]) -> bytes:
     """Rebuild a tar container matching Roland's format byte-for-byte.
 
-    Roland's tar is produced by GNU tar: numeric uid/gid (1750), mode 0777,
+    Roland's tar is produced by GNU tar: numeric uid/gid (1000), mode 0777,
     EMPTY uname/gname, and the GNU "ustar  \\0" magic variant.  The mtime of
     each member must be carried through from the original, otherwise the
     rebuild differs in every header block.

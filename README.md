@@ -14,7 +14,7 @@ CPUs. Analysis of what lives where, and what is protected, is in
 
 ```sh
 make help          # list targets
-make test          # verification suite (53 checks)
+make test          # verification suite (56 checks)
 make inspect       # print container structure for all three versions
 make extract-all   # unpack everything into firmware/raw/
 make candidate     # build a demo modified image into build/
@@ -55,7 +55,7 @@ $ make test
 9/9  checks passed       tests/test_patch.py
 14/14 checks passed      tests/test_safety.py
 2/2  checks passed       tests/test_unlzs.py
-1/1  checks passed       tests/test_rb_record.py
+4/4  checks passed       tests/test_rb_record.py
 ```
 
 Because a rebuild of unmodified input reproduces the original byte-for-byte,

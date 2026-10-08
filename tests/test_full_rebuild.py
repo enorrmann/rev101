@@ -6,7 +6,9 @@ This is the acceptance test that matters for shipping a modified image: if
 diff in the output is provably the change we intended.
 
 Also verifies the structural facts we rely on when planning a patch:
-  * C0A payload is high-entropy (encrypted) => cannot be edited in place.
+  * C0A payload is high-entropy and only partly compressible => it cannot be
+    edited in place (see FINDINGS.md §4; entropy alone is not proof of
+    encryption, so the test uses compressibility).
   * C1A/C1C entries (idm1.bin, sdram1.bin) are plaintext ARM => editable.
 
 Run:  python3 tests/test_full_rebuild.py

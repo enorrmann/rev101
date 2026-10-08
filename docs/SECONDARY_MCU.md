@@ -288,18 +288,23 @@ descriptor whose last field is a **base pointer computed as `stored + file_base`
 A replacement image must satisfy that expectation or the device will follow a
 bad pointer at boot.
 
-## Why `init.lzs` cannot be solved from these images
+## Why `init.lzs` needs no decompressor
+
+`init.lzs` is **not compressed**: it is a 4-bit-framed stream in which plain
+8-bit data bytes are interleaved with marker bytes whose low nibble is `f`
+(`0x0f`..`0xff`). Dropping the markers recovers the payload — header tags and
+drum-kit fragment names included — see [FINDINGS.md](FINDINGS.md) §6 and
+`tools/unlzs.py`. There is no `.lzs` decompressor to find, in these images or
+anywhere else, so the earlier "locate the `.lzs` routine" plan is closed and
+moot; what remains unresolved is the `PRJ5` field-level record schema, not a
+codec.
 
 A whole-file search for `init.lzs`, `.lzs` and `lzs` over `C0A`, `C0C`, `C1A`,
 `C1C`, `sdram1.bin` and `idm1.bin` returns **one** hit: the filename in `C0C`'s
 entry table. `VQSPI` occurs exactly twice in the whole extraction, both in
-`sdram1.bin`.
-
-Combined with the read path above, this means the decompressor is **not**
-reachable from the QSPI loader in either plaintext image. It lives either in
-the unreadable `C0A` main-CPU application or behind a pointer table the
-analyser did not resolve. The "find the `.lzs` routine in `sdram1.bin`" plan is
-therefore **closed**; the algorithm must come from an external implementation.
+`sdram1.bin`. So nothing in the plaintext images consumes the init data by
+name either; whatever reads the framed payload sits in the unreadable `C0A`
+main-CPU application or behind a pointer table the analyser did not resolve.
 
 Related false lead, recorded so it is not re-explored: `sdram1.bin`
 `FUN_01075c1c` / `FUN_01075b4c` contain what look like shift amounts
@@ -314,10 +319,11 @@ self-test, which uses the algorithm above.
 1. **Determine the CRC-32 byte range** the entry `crc32` field covers, by
    re-running the recovered algorithm over candidate ranges until it reproduces
    a stored value for several entries at once.
-2. **Reconcile the entry-base arithmetic** in `FUN_01123bf0`: it stores the
-   `+0x28` field (`0x10`) and indexes `base + i*0x20`, which does not match the
-   observed `0x30` table start. Either the field means something else or the
-   decompilation elides an add.
+2. ~~Reconcile the entry-base arithmetic in `FUN_01123bf0`.~~ Resolved: the
+   lookup reads the 16 header bytes from QSPI-container offset 0 (the magic at
+   file `+0x20`) and indexes entries as `0x10 + i*0x20` in that space, i.e.
+   file `0x30 + i*0x20` — the observed table start. See
+   [FINDINGS.md](FINDINGS.md) §8.1.1.
 3. **Build the secondary-MCU replacement interface map** from the recovered
    symbols (`CORE1_LOAD_QSPI`, `BMCInit*`, `CEZUtilQSPI*`, `CChoSDD320`) so a
    custom image can be linked against the real entry points.
@@ -344,8 +350,9 @@ export XDG_CONFIG_HOME=/tmp/rev101/ghidra_home
 * This image is **plaintext, symbol-rich and debug-enabled** — by far the best
   documented part of the product.
 * The `qspi_ver_def.h` parser is located (`0x2c8ad0` key table) and the QSPI
-  read path is decompiled. The `.lzs` decompressor is **not** here — see
-  "Why `init.lzs` cannot be solved from these images" above.
+  read path is decompiled. There is no `.lzs` decompressor to find — `init.lzs`
+  is 4-bit-framed, not compressed — see "Why `init.lzs` needs no decompressor"
+  above.
 * The BMC/DSP/ERAM/QSPI driver split is now named, so a replacement firmware
   has a clear interface map to work against.
 * Because the QSPI loader consumes raw bytes and never transforms them, a
