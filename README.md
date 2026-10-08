@@ -14,7 +14,7 @@ CPUs. Analysis of what lives where, and what is protected, is in
 
 ```sh
 make help          # list targets
-make test          # verification suite (36 checks)
+make test          # verification suite (53 checks)
 make inspect       # print container structure for all three versions
 make extract-all   # unpack everything into firmware/raw/
 make candidate     # build a demo modified image into build/
@@ -26,9 +26,12 @@ make ghidra        # analyse the plaintext secondary-MCU firmware
 ```
 docs/FINDINGS.md        container formats, region map, what is/isn't protected
 docs/PATCHING.md        how to build and verify a modified image
+docs/USAGES.md          what you can do right now, with worked custom-firmware examples
 docs/SECONDARY_MCU.md   the plaintext ARM Cortex-M firmware (Ghidra results)
 
 tools/mc101fw.py        tar + QSPI parse/rebuild library (stdlib only)
+tools/rb_record.py      parse the confirmed plaintext record-container schema
+tools/unlzs.py          unframe the 4-bit-marked `init.lzs` stream (payload readable, PRJ5 field schema still open)
 tools/extract.py        extract members and QSPI entries
 tools/patch.py          replace QSPI entry payloads and repack
 tools/make_candidate.py build a demo modified image
@@ -51,6 +54,8 @@ $ make test
 9/9  checks passed       tests/test_full_rebuild.py
 9/9  checks passed       tests/test_patch.py
 14/14 checks passed      tests/test_safety.py
+2/2  checks passed       tests/test_unlzs.py
+1/1  checks passed       tests/test_rb_record.py
 ```
 
 Because a rebuild of unmodified input reproduces the original byte-for-byte,
@@ -79,8 +84,8 @@ point this tooling at an image you did not build yourself:
 | `sdram1.bin` / `idm1.bin` (secondary MCU) | **plaintext ARM Cortex-M**, QSPI read path decompiled; primary target now |
 | `C1C` entries, `C0C` metadata | plaintext, editable in place |
 | QSPI entry `crc32` field | algorithm is **CRC-32** (confirmed), the covered byte range is **not** — see [docs/SECONDARY_MCU.md](docs/SECONDARY_MCU.md) |
-| `C0A` main application | partly compressed, 1.1 MB incompressible window (`0x0c0000`–`0x1d0000`) of undetermined protection |
-| `init.lzs` runtime | bespoke `.lzs` codec, **not yet decompressed**; no decompressor exists in either plaintext image |
+| `C0A` main application | partly compressed, ~1.1 MB incompressible window (`0x0c0000`–`0x1d0000`) of undetermined protection |
+| `init.lzs` runtime | **PRJ5 project, not yet fully decoded**: `[data][0xXf]` 12-bit framing confirmed, names readable via `tools/unlzs.py`; field-level record schema unresolved — see [docs/FINDINGS.md](docs/FINDINGS.md) §6 |
 | bootloader verification | unknown — first stage not present in these images |
 
 The realistic custom-firmware target today is the **secondary MCU**, which

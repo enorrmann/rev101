@@ -25,6 +25,10 @@ test:
 	$(PY) tests/test_patch.py
 	@echo
 	$(PY) tests/test_safety.py
+	@echo
+	$(PY) tests/test_unlzs.py
+	@echo
+	$(PY) tests/test_rb_record.py
 
 extract:
 	$(PY) tools/extract.py --version 182 --repack-check

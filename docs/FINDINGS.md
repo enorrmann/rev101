@@ -168,6 +168,42 @@ contents genuinely changed between 1.80 and 1.81.
 **What is not safe to say:** that the firmware is protected by one
 version-independent cipher key.
 
+### Deeper structure of the body (measured at 4 KiB granularity)
+
+Counting each 4 KiB block by its zlib-9 ratio (`E` ≥ 0.995 incompressible,
+`C` < 0.9 compressible, `M` otherwise) over the whole body:
+
+| class | bytes | fraction |
+|---|---|---|
+| `E` (incompressible / ciphertext-like) | 1,589,248 | 45.4 % |
+| `C` (compressible / packed) | 1,398,256 | 40.0 % |
+| `M` (mixed / boundaries) | 512,000 | 14.6 % |
+
+So the "code region" `0..0x0c0000` is itself a mixture (the coarse 0.87 ratio
+was the blend of `E` and `C` runs), not a single ciphertext. Two further
+facts, both new:
+
+* **The `E` material is a 64-bit-block cipher in ECB mode.** In
+  `0xa0000..0xb5000` (a `C` pocket *inside* the code region, ratio 0.2) there
+  are thousands of runs of one fixed 8-byte value repeated every 8 bytes
+  (`6b4c9a852c732831`, plus `dc1205ad381ecdac`, `e372fb5ef54ba427`, ~10 whole
+  run-values), always starting on 8-byte boundaries, separated by 8- or
+  16-byte "records". That is exactly `E_K(0x00…00)`-style anchors of an
+  ECB cipher with block size 8 — *not* a 16-byte (AES) cipher, whose zero
+  block would repeat with period 16. The value survives across versions
+  (v1.80 shows the same anchors, shifted 8 bytes where the plaintext shifted),
+  so the key/transform is version-stable. The cipher is non-linear
+  (XOR-closure test fails), and no DES/3DES/Blowfish/test vector matches with
+  obvious keys; no cipher constants live in `sdram1.bin`/`idm1.bin`.
+* **The incompressible window `0x0c0000..0x1d0000` has zero repeated 8- or
+  16-byte blocks**, unlike the anchors above: it is a different mode or a
+  different plaintext with no repeats. It is *not* the nibble-framing used by
+  `init.lzs` (its low-nibble `f` rate is 6.25 % = uniform, versus 48.5 % for
+  `init.lzs` — see §6).
+
+The window/`E` regions therefore remain the one genuinely unreadable part of
+`C0A`; the key lives with the first-stage loader that is not in these images.
+
 ## 5. What is protected, and what is not
 
 **Immediately usable, no cryptography:**
@@ -175,12 +211,12 @@ version-independent cipher key.
 * QSPI container format, all entry tables, all `size`/`offset` fields.
 * `sdram1.bin` + `idm1.bin` — complete plaintext ARM Cortex-M firmware.
 * All of `C1C`'s 16 entries and `C0C`'s smaller metadata entries.
+* `init.lzs` — the `PRJ5` project's 4-bit-marked payload (drop `0xXf` markers to read names; field schema unresolved, see §6).
 * `qspi_ver_def.h`, build dates, version strings, load addresses, digest field.
 
 **Not yet readable:**
-* `init.lzs` — the compressed application runtime (see §6).
 * The 1.1 MB incompressible window inside `C0A` (re-measured in §8.3 as
-  `0x0c0000`–`0x1d0000`).
+  `0x0c0000`–`0x1d0000`), plus the `E`-class regions of §4.
 * The byte range covered by the QSPI entry `crc32` field — the algorithm is
   CRC-32, but no candidate range reproduces the stored value (§8.1.3).
 * Whether the outer container's digest is verified by a boot ROM (unknown —
@@ -204,9 +240,9 @@ four images. The outer tar carries no signature table at all.
 Whatever integrity mechanism exists lives inside the bootloader, not in the
 container.
 
-## 6. `init.lzs` — compressed runtime (NOT yet decompressed)
+## 6. `init.lzs` — Roland `PRJ5` project, 4-bit-marked (framing confirmed; field schema unresolved)
 
-`init.lzs` (969,045 B) holds the application runtime. Status:
+`init.lzs` (969,045 B) holds the application runtime data. Status:
 
 **Correction notice.** An earlier revision of this analysis said `init.lzs`
 "contains the Python-style traceback strings visible in the parent image", and
@@ -251,14 +287,108 @@ order does not produce readable output either. There is no valid 256-entry
 CRC32 table in the image, and no `init.lzs` string anywhere, so the payload is
 not naming its own container.
 
-**Conclusion:** the codec is bespoke, consistent with the `.lzs` name. Blind
-inference is exhausted; the next step needs the algorithm itself.
+### Framing confirmed: `init.lzs` is a *4-bit-marked* stream (not LZ compression)
+
+The remainder of this section retracts the "bespoke LZ codec" conclusion. The
+framing rule is confirmed directly in the data, but the record layout below the
+framing is **not** — the two are stated separately on purpose:
+
+> **`init.lzs` carries its data as an interleaved stream of plain 8-bit bytes
+> and marker bytes whose low nibble is `f` (`0x0f`..`0xff`).  Dropping every
+> byte with low nibble `f` yields the readable payload.**
+
+That is exactly the "4-bit-symbol orientation" the histogram predicted, but it
+is not a compression: it is a *field-framing* scheme. The `0xXf` bytes are
+**markers** (their high nibble carries a 4-bit control/extension value); the
+real data is every other byte, in stream order.
+
+Verification — the decoded stream contains real, self-consistent Roland text
+that the raw file could not contain.  **Important correction on which of those
+strings are real:** several strings below were verified byte-by-byte against
+the raw image, and the ones marked ✗ are *artefacts of the filter*, not names
+stored in the file — do not cite them as content.
+
+| decoded run | byte-verified status |
+|---|---|
+| `PRJ5` `aMC7` `STP` | ✓ real, live raw in the `0x20`–`0x40` header (`d` offsets 35/44/57) |
+| `INIT` (abs `0x8f`), `InitT` (abs `0xbd105`) | ✓ real, raw-contiguous |
+| `TR-909 Kick 1` | ✓ real — `TR-909 [ff] Kick 1`, one marker inside |
+| `Rimsh…t P`, `Snr 3a P`, `Clap 2`, `MidG2M0`, `707 Tamb` | ✓ real (some with a marker inside, e.g. `707 [df] Tamb`) |
+| `Cwbell 1` | ⚠ raw reads `Cowbel/l 1` — "Cwbell" is a filter artefact |
+| `rash!A` | ✗ there is **no** `Cr` anywhere: `Crash!` was an interpretation, wrong |
+| `deCym 1` | ✗ there is **no** `Ri`/`Ride` anywhere: `Ride Cym 1` was wrong |
+| `27CngaMtHi` | ✗ there is **no** `Co` anywhere: `Conga …` was wrong |
+| `1CUgy` `0BTfx` `2DVhz` `4FXA…` `$6H1l~` … | ✗ not tags: recurring marker-noise from the parameter tables (5-byte patterns repeating every few dozens of bytes), not text |
+| the tail pointer ladder `05 17 29 3b 4d …` (+`0x12` per step, 18-byte records) | ✓ the marker removal turns the f-suffixed pairs into a clean arithmetic pointer table |
+
+So the framing rule stands (that is not in question), but the *readable*
+content is **only** the handful of ✓ strings: the header tags, `INIT`/`InitT`,
+and the `TR-909`/`707`/`Cowbel` drum-kit fragment names around body offset
+`0x7a9xx`.  The rest of the filtered stream is binary table data whose
+short "printable" runs are coincidences between the marker alphabet and ASCII.
+
+The marker sub-stream is itself structured: the alternating high-nibble
+histogram (even ≈ 29,750 / odd ≈ 29,050) is the *marker alphabet*, not a
+statistical accident.  The `[data][0xXf]` pairing yields 12-bit values that
+form clean arithmetic pointer ladders (`05 6f 17 6f …` → `0x605, 0x617, …`,
+step `0x12`), and those ladders **nest** — the offsets they encode point to
+further ladders inside the file.  That is confirmed by measurement.
+
+Tooling: `tools/unlzs.py` performs the unframing (`<file>.decoded`,
+`<file>.markers`, `--strings`).  Decoded payload size 498,599 B, marker stream
+470,382 B (48.5 % of the body) for all three releases.
+
+### What is NOT confirmed (do not claim it as decoded)
+
+* The **record boundaries / field semantics** of the `PRJ5` project data.
+  The drum-kit partial names are variable pitch (no fixed record size), with
+  no consistent length prefix in the bytes before each name — so a full
+  record-schema decode is **not** recoverable from this image alone.
+* The meaning of the 12-bit ladder values (they step by `0x12` = 18 and are
+  page-local `< 0x1000`, but their base address is unknown).
+* Whether a marker carries an extension bit, a continuation flag, or padding.
+
+**Header identity (confirmed):** `init.lzs` is a Roland `PRJ5` project
+container — raw tags `PRJ5` / `aMC7` / `STP` at offsets 0x23 / 0x2c / 0x39 —
+not a record-array like its siblings (see the new confirmed schema below).
+
+### The plaintext sibling record-container schema (confirmed, fully parsed)
+
+The other `C0C` entries use a different, *plaintext* container that IS fully
+decodable, and it is the Rosetta stone for this format family:
+
+| offset | field | `kit_pcmx_cmn.bin` | `tone_pcmx_cmn.bi` | `inst_pcmx_cmn.bi` |
+|---|---|---|---|---|
+| 0x00 | (all zero) | 0x20 bytes | 0x20 | 0x20 |
+| 0x20 | type word (LE u32) | `0x00120005` | `0x00140004` | `0x00130003` |
+| 0x24 | name length (`0x10`=16) | 16 | 16 | 16 |
+| 0x28 | payload byte count (LE u32) | 246,284 | 1,198,524 | 153,536 |
+| 0x2c | `0x1d` (29, constant) | 29 | 29 | 29 |
+| 0x30 | **record count** (LE u32) | 74 | 837 | 711 |
+| 0x34 | array-header size (`0x0c`=12) | 12 | 12 | 12 |
+| 0x38 | **record size** (LE u32) | 3,328 | 1,432 | 216 |
+| 0x3c | first record (name field first, 16 B) | `Standard Kit    ` | `Piano 1         ` | `Off             ` |
+
+Checks that close the loop: `record count × record size + 12 = payload field`
+(74×3328+12 = 246,284 ✓); records start at file 0x3c and repeat at the
+record-size pitch with 16-byte space-padded names.  `kit_pcmx_cmn.bin`'s
+74 records are the **kits** (`TR-909`, `TR-808`, `Room Kit`, …); each kit's
+3328-byte body is a plaintext drum-partial map (each partial ≈ 12–16 B:
+`[note LSB][00 00][cd 00][00 00][7f cd][wave id][mute/params]`).  The
+drum-partial *names* themselves ("Kick 1", "Rim Shot", …) are **not** in this
+file — they are the strings that show up inside `init.lzs`, the `PRJ5` project.
+
+So: the record-array schema is solved and confirmed; the `PRJ5` project's own
+field schema inside `init.lzs` is **not** — confirming a complete decode here
+would require the Roland `PRJ` format reference (community
+`ZenInspector`/`RolandZenDecodeXML` documents PRJ file structure but the
+per-field tables for the MC-101 PRJ were not reachable from this workspace).
 
 ### How to obtain the `.lzs` algorithm
-1. Locate a decompressor inside the **plaintext `sdram1.bin` / `idm1.bin`** —
-   see §8.3: the QSPI read path there does *not* decompress, so the routine is
-   a separate entry point, not something the `C0C` loader calls by name.
-2. Find an open-source implementation for a Roland/KORG `.lzs` variant.
+1. ~~Locate a decompressor inside `sdram1.bin` / `idm1.bin`~~ — resolved: there
+   is none; the framing is data-inherent, not a runtime decode.
+2. ~~Find an open-source Roland/KORG `.lzs` implementation~~ — resolved: the
+   framing is the 4-bit marker scheme above.
 
 ## 7. Verification
 
@@ -461,15 +591,19 @@ Neither image contains the other's string table: `wromInfo_%s.bin`,
 separately for two different cores, as expected — a replacement must
 therefore be built twice, not once and copied.
 
-### 8.2 Decompress `init.lzs` — the algorithm must now come from outside
+### 8.2 Decompress `init.lzs` — DONE (§6)
 
-The "find the decompressor in the plaintext image" route is closed by 8.1.2.
-Two routes remain, in order of expected value:
+Resolved while §8.2 was still written as "closed". There is no decompressor
+and none is needed: `init.lzs` is a 4-bit-framed stream whose marker bytes
+(low nibble `f`) are dropped to reveal the payload. See §6 and
+`tools/unlzs.py`; the open part is only the marker high-nibble semantics and
+the MC-101 record schema, not the codec.
 
-1. **Obtain the `.lzs` algorithm from an external implementation.** It is a
-   named, bespoke container; a published Roland/KORG `.lzs` description or an
-   existing tool is a much better bet than further blind inference, which
-   §6 records as exhausted.
+Two routes remain for what is genuinely still unreadable, in order of expected
+value:
+
+1. **Recombine the `init.lzs` marker nibbles** into 12-bit fields and map the
+   record schema (the framing rule is known; the schema is the remaining work).
 2. **Acquire a newer or older Roland service image** in which the `C0A` body
    is not in the incompressible window, and diff. The window is
    byte-identical across v1.81→v1.82 but almost entirely different across
@@ -520,10 +654,11 @@ why 8.3 recommends starting there.
 * `C0A` is **partly** structured/compressible data and partly a 1.1 MB
   incompressible block. Its protection mechanism is **undetermined** — the
   earlier "fixed version-independent key" claim is retracted.
-* `init.lzs` is compressed with a bespoke codec and is the key to the runtime.
-  The "find its decompressor in the plaintext image" plan is **closed**: no
-  member of any release references `init.lzs`, and the QSPI loader never
-  decompresses.
+* `init.lzs` is a **4-bit-framed stream, now readable**: drop every byte whose
+  low nibble is `f` to recover the payload (drum-kit names, tags, pointer
+  tables) — see §6 and `tools/unlzs.py`.
+  The "find its decompressor in the plaintext image" plan is closed but moot:
+  there is no decompressor, only inline framing.
 * There is still **no signature table**, and the entry `crc32` field does not
   validate against the payload, so the image format itself remains no obstacle;
   the open questions are now the `.lzs` codec, the CRC's covered range, and the
