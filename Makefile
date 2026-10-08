@@ -1,6 +1,6 @@
 PY ?= python3
 
-.PHONY: help test extract extract-all clean inspect
+.PHONY: help test extract extract-all clean inspect candidate anchors crc-scan ciphers
 
 help:
 	@echo "MC-101 (RPG69) firmware reverse-engineering workspace"
@@ -12,6 +12,9 @@ help:
 	@echo "  make candidate    build build/MC101_UPA_up.bin with a demo edit"
 	@echo "  make ghidra       analyse the plaintext secondary-MCU firmware"
 	@echo "  make decompile    decompile every function of both images"
+	@echo "  make anchors      build the C0A ECB-anchor corpus (docs/C0A_EXPLOITATION.md §1)"
+	@echo "  make crc-scan     search the QSPI entry crc32 range (§3)"
+	@echo "  make ciphers      test 64-bit block ciphers against the corpus (§2)"
 	@echo "  make clean        remove generated extraction output"
 	@echo ""
 	@echo "docs/FINDINGS.md      what the firmware is and what is protected"
@@ -56,6 +59,19 @@ decompile:
 	tools/ghidra_decompile.sh --all idm1.bin
 	tools/ghidra_decompile.sh --all sdram1.bin
 	@echo "output: $${GHIDRA_WORK:-/tmp/rev101}/*.decompall.txt"
+
+# C0A cryptanalysis helpers (docs/C0A_EXPLOITATION.md).  All are offline and
+# read only the extracted images; `make extract-all` first.
+anchors:
+	$(PY) tools/find_anchors.py --diff 180 181
+	$(PY) tools/find_anchors.py --diff 181 182
+
+crc-scan:
+	$(PY) tools/find_crc_range.py
+	$(PY) tools/sweep_crc_range.py
+
+ciphers:
+	$(PY) tools/try_block_ciphers.py
 
 clean:
 	rm -rf firmware/raw firmware/decoded build

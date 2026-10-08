@@ -28,6 +28,7 @@ docs/FINDINGS.md        container formats, region map, what is/isn't protected
 docs/PATCHING.md        how to build and verify a modified image
 docs/USAGES.md          what you can do right now, with worked custom-firmware examples
 docs/SECONDARY_MCU.md   the plaintext ARM Cortex-M firmware (Ghidra results)
+docs/C0A_EXPLOITATION.md the C0A protected region: action plan + results (§6)
 
 tools/mc101fw.py        tar + QSPI parse/rebuild library (stdlib only)
 tools/rb_record.py      parse the confirmed plaintext record-container schema
@@ -35,6 +36,10 @@ tools/unlzs.py          unframe the 4-bit-marked `init.lzs` stream (payload read
 tools/extract.py        extract members and QSPI entries
 tools/patch.py          replace QSPI entry payloads and repack
 tools/make_candidate.py build a demo modified image
+tools/find_anchors.py   build the C0A ECB-anchor known-plaintext corpus (CSV)
+tools/find_crc_range.py search the QSPI entry crc32 range (structured rules)
+tools/sweep_crc_range.py search the QSPI entry crc32 range (broad sweep)
+tools/try_block_ciphers.py test 64-bit block ciphers against the anchor corpus
 tools/ghidra_analyze.sh headless Ghidra analysis driver
 tools/ghidra_decompile.sh decompile one function, or every function (--all)
 tools/ghidra/*.java     Ghidra post-scripts (function dump, decompile, string xrefs)
